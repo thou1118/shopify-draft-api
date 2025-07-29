@@ -1,4 +1,4 @@
-// 유효한 기본 이메일 사용 버전
+// 고객 먼저 생성 후 Draft Order 생성 방식
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
@@ -10,7 +10,44 @@ export default async function handler(req, res) {
   try {
     const order = req.body || {};
     
-    // 🔥 해결책: 확실히 유효한 기본 이메일 사용
+    // 🎯 1단계: 먼저 고객 생성 (이메일 검증 우회)
+    console.log('1단계: 고객 생성 시작');
+    
+    const customerData = {
+      customer: {
+        first_name: '테스트',
+        last_name: '고객',
+        email: `customer${Date.now()}@shopifypartners.com`,  // 파트너 도메인 사용
+        verified_email: true,
+        accepts_marketing: false
+      }
+    };
+
+    const customerResponse = await fetch(
+      `https://${process.env.SHOP_URL}/admin/api/2024-04/customers.json`,
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Shopify-Access-Token': process.env.ADMIN_TOKEN
+        },
+        body: JSON.stringify(customerData)
+      }
+    );
+
+    let customerId = null;
+    
+    if (customerResponse.ok) {
+      const customerResult = await customerResponse.json();
+      customerId = customerResult.customer.id;
+      console.log('고객 생성 성공:', customerId);
+    } else {
+      console.log('고객 생성 실패, 고객 없이 진행');
+    }
+
+    // 🎯 2단계: Draft Order 생성 (고객 ID 사용)
+    console.log('2단계: Draft Order 생성 시작');
+    
     const draftOrder = {
       draft_order: {
         line_items: [{
@@ -18,21 +55,19 @@ export default async function handler(req, res) {
           price: "1000",
           quantity: 1,
           properties: [
-            { name: "주문ID", value: order.order_id || 'TEST' }
+            { name: "주문ID", value: order.order_id || 'TEST' },
+            { name: "테스트", value: '고객 생성 방식' }
           ]
         }],
-        customer: {
-          email: 'noreply@shopify.com',  // Shopify 공식 이메일 사용
-          first_name: '테스트 고객'
-        },
-        note: `테스트 주문 ${Date.now()}`,
+        ...(customerId && { customer: { id: customerId } }),  // 고객 ID가 있을 때만 추가
+        note: `고객 생성 방식 테스트: ${Date.now()}`,
         email: false
       }
     };
 
-    console.log('공식 이메일 사용 Draft Order:', JSON.stringify(draftOrder));
+    console.log('생성할 Draft Order:', JSON.stringify(draftOrder, null, 2));
 
-    const response = await fetch(
+    const draftResponse = await fetch(
       `https://${process.env.SHOP_URL}/admin/api/2024-04/draft_orders.json`,
       {
         method: 'POST',
@@ -44,27 +79,29 @@ export default async function handler(req, res) {
       }
     );
 
-    if (!response.ok) {
-      const error = await response.text();
-      console.log('Shopify 오류:', error);
+    if (!draftResponse.ok) {
+      const error = await draftResponse.text();
+      console.log('Draft Order 생성 실패:', error);
       return res.status(500).json({ 
         success: false, 
-        error: `API 오류 (${response.status})`,
+        error: `Draft Order 생성 실패 (${draftResponse.status})`,
         details: error,
-        sent_data: draftOrder
+        customer_created: !!customerId
       });
     }
 
-    const result = await response.json();
+    const result = await draftResponse.json();
     
     return res.json({
       success: true,
       draft_order_id: result.draft_order.id,
       order_number: result.draft_order.name,
-      message: 'Shopify 공식 이메일로 성공!'
+      customer_id: customerId,
+      message: '고객 생성 방식으로 성공!'
     });
 
   } catch (error) {
+    console.log('전체 오류:', error);
     return res.status(500).json({ 
       success: false, 
       error: error.message 
